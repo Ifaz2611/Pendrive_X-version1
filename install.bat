@@ -3,7 +3,7 @@ title Portable AI - Multi-Model Setup
 color 0E
 
 echo ===================================================
-echo     PORTABLE UNCENSORED AI - USB SETUP             
+echo     Pendrive_X - USB SETUP             
 echo ===================================================
 echo.
 echo This will download and configure AI models onto
@@ -29,3 +29,6 @@ echo.
 echo To start your AI, double-click start-windows.bat
 echo.
 pause
+
+
+@REM Ethan Hunt [IMF] - "Mission Accomplished!"
