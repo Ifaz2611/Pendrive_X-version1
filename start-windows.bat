@@ -1,9 +1,9 @@
 @echo off
-title Portable Uncensored AI - Launcher
+title PENDRIVE_X AI - Launcher
 color 0A
 
 echo ===================================================
-echo     Launching Portable AI Engine from USB...       
+echo     Launching PENDRIVE_X Engine from USB...       
 echo ===================================================
 
 :: -------------------------------------------------------
