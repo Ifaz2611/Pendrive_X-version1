@@ -11,7 +11,7 @@ During installation, you'll choose which model(s) to download:
 
 | # | Model | Size | Label | Best For |
 |---|-------|------|-------|----------|
-| 1 | **NemoMix Unleashed 12B** | ~8.7 GB |  UNCENSORED | ⭐ Recommended — best quality uncensored |
+| 1 | **NemoMix Unleashed 12B** | ~8.7 GB |  UNCENSORED | Recommended — best quality uncensored |
 | 2 | **Dolphin 2.9 Llama 3 8B** | ~4.9 GB |  UNCENSORED | Classic uncensored all-rounder |
 | 3 | **Mistral 7B Instruct v0.3** | ~4.1 GB |  STANDARD | Strong reasoning & coding |
 | 4 | **Qwen 2.5 7B Instruct** | ~4.7 GB |  STANDARD | Great multilingual support |
