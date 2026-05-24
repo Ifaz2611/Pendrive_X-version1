@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ===================================================
-#     PORTABLE AI - Multi-Model Setup (Linux)
+#     PENDRIVE_X AI - Multi-Model Setup (Linux)
 # ===================================================
 
 # Make terminal output pretty
@@ -8,14 +8,14 @@ RED='\033[0;31m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
 
 clear
 echo -e "${CYAN}==================================================="
-echo -e "     PORTABLE UNCENSORED AI - USB SETUP"
+echo -e "     PENDRIVE_X AI - USB SETUP"
 echo -e "===================================================${NC}"
 echo ""
 echo "This will download and configure AI models onto"
 echo "your USB drive. You'll get to CHOOSE which models"
 echo "to install from a curated list."
 echo ""
-echo "  - 6 preset models (uncensored + standard)"
+echo "  - 7 preset models (uncensored + standard)"
 echo "  - Custom model support (bring your own GGUF)"
 echo "  - Minimum USB space: 16 GB (32 GB recommended)"
 echo ""

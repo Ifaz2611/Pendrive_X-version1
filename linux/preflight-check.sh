@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ================================================================
-# PORTABLE AI USB - Pre-Flight Requirements Check
+#  PENDRIVE_X AI USB - Pre-Flight Requirements Check
 # ================================================================
 # Detects the actual mounted USB drive, checks free space and
 # read/write speed, then optionally launches the installer.
@@ -12,15 +12,23 @@
 
 set -uo pipefail
 
-# ── Colour codes ──────────────────────────────────────────────
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-MAGENTA='\033[0;35m'
-DGRAY='\033[0;90m'
+# ── Colour codes (Modern High-Contrast Palette) ──────────────────
+RED='\033[1;91m'
+GREEN='\033[1;92m'
+YELLOW='\033[1;93m'
+CYAN='\033[1;96m'
+MAGENTA='\033[1;95m'
+DGRAY='\033[2;90m'
 BOLD='\033[1m'
 NC='\033[0m'
+
+# ── Terminal Initialization ──────────────────────────────────────
+echo -e "\n${CYAN}┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓${NC}"
+echo -e "${CYAN}┃${NC}  ${MAGENTA}⚡ PENDRIVE_X AI USB${NC} ${DGRAY}|${NC} ${YELLOW}Pre-Flight Requirements Check${NC}   ${CYAN}┃${NC}"
+echo -e "${CYAN}┃${NC}  ${DGRAY}Validating hardware, storage & speed before install...${NC}  ${CYAN}┃${NC}"
+echo -e "${CYAN}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛${NC}\n"
+echo -e "${DGRAY}[SYS]${NC} Initializing diagnostic environment..."
+echo -e "${DGRAY}[SYS]${NC} Loading requirement thresholds..."
 
 # ── Minimum Requirements ──────────────────────────────────────
 MIN_SPACE_GB=16
@@ -355,18 +363,20 @@ space_bar() {
 clear
 echo ""
 echo -e "${CYAN}  ╔══════════════════════════════════════════════════════╗${NC}"
-echo -e "${CYAN}  ║   🔍  Portable AI USB — Pre-Flight Check            ║${NC}"
-echo -e "${CYAN}  ║       Verifying drive before installation...        ║${NC}"
+echo -e "${CYAN}  ║      PENDRIVE_X AI USB — Pre-Flight Check            ║${NC}"
+echo -e "${CYAN}  ║        Verifying drive before installation...        ║${NC}"
 echo -e "${CYAN}  ╚══════════════════════════════════════════════════════╝${NC}"
 echo ""
 echo -e "  ${DGRAY}Script Dir   : $SCRIPT_DIR${NC}"
 echo -e "  ${DGRAY}Minimum      : ${MIN_SPACE_GB} GB free  |  Write ≥ ${MIN_WRITE_MBPS} MB/s  |  Read ≥ ${MIN_READ_MBPS} MB/s${NC}"
 echo -e "  ${DGRAY}Recommended  : ${REC_SPACE_GB} GB free  |  Write ≥ ${REC_WRITE_MBPS} MB/s  |  Read ≥ ${REC_READ_MBPS} MB/s${NC}"
+echo -e "${DGRAY}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
 
 # ================================================================
 # STEP 1 — DEPENDENCY CHECK
 # ================================================================
 section "Step 1 / 4 — Required Tools"
+echo -e "${DGRAY}[SCAN]${NC} Checking for essential CLI utilities..."
 echo ""
 
 MISSING_DEPS=()
@@ -383,12 +393,15 @@ if (( ${#MISSING_DEPS[@]} > 0 )); then
   echo ""
   echo -e "  ${YELLOW}Install missing tools:${NC}"
   echo -e "  ${DGRAY}sudo apt install ${MISSING_DEPS[*]}${NC}"
+else
+  echo -e "\n  ${DGRAY}[OK]${NC} All required tools are present and ready.\n"
 fi
 
 # ================================================================
 # STEP 2 — USB DRIVE DETECTION
 # ================================================================
 section "Step 2 / 4 — USB Drive Detection"
+echo -e "${DGRAY}[SCAN]${NC} Probing system block devices for removable media..."
 echo ""
 
 if choose_from_mounted_usbs; then
@@ -498,6 +511,7 @@ fi
 # STEP 3 — DISK SPACE CHECK
 # ================================================================
 section "Step 3 / 4 — Available Disk Space"
+echo -e "${DGRAY}[SCAN]${NC} Calculating usable storage and capacity limits..."
 echo ""
 
 if [[ -z "$TARGET_MOUNT" || ! -d "$TARGET_MOUNT" ]]; then
@@ -545,7 +559,7 @@ echo -e "  ${DGRAY}└───────────────────�
 # STEP 4 — DRIVE SPEED BENCHMARK
 # ================================================================
 section "Step 4 / 4 — Drive Speed Benchmark"
-echo ""
+echo -e "${DGRAY}[BENCH]${NC} Measuring sequential read/write throughput..."
 echo -e "  ${DGRAY}Using a ${BENCH_SIZE_MB} MB temporary test file on:${NC}"
 echo -e "  ${DGRAY}${TARGET_MOUNT}${NC}"
 

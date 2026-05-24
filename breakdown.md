@@ -15,7 +15,7 @@
 
   ---
 
-  🚀 Future Implementation Suggestions
+  Future Implementation Suggestions
 
   To evolve this project from a "Portable Setup" to a "Portable AI Workstation," here is a proposed roadmap:
 
