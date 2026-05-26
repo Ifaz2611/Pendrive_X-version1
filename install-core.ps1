@@ -1,5 +1,5 @@
 # ================================================================
-# PORTABLE UNCENSORED AI - AUTOMATED USB SETUP SCRIPT (Windows)
+# Pendrive_X AI - AUTOMATED USB SETUP SCRIPT (Windows)
 # ================================================================
 # Multi-Model Edition: Choose one or more AI models to install!
 # Supports preset models + custom HuggingFace GGUF downloads.
