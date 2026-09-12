@@ -254,75 +254,12 @@ Re-running the *installer* (`install.bat` / `install-core.sh`) will still honor 
 
 ---
 
-## Bugs Fixed in this Revision
-
-**Critical**
-
-- **`linux/install-core.sh` & `linux/start-linux.sh`: `for (( i=0; i<<N; i++ ))`** used bit-shift (`<<`) instead of comparison (`<`), so totals, downloads, Modelfile generation, installed list, health checks, and final summaries never executed. Fixed all 9 occurrences → `i<N` / `i<MAX_WAIT`. — `linux/install-core.sh:316,342,367,424,445,565,581,671` and `linux/start-linux.sh:159`
-- **`install-core.ps1`: `Pause-AnyKey` defined after use** — calling it before definition threw `not recognized`. Moved definition to top of script and removed duplicate. — `install-core.ps1:13`
-- **`install-core.ps1` / `linux/install-core.sh`: NemoMix `MinBytes` mismatch** (7 GB vs 6 GB). Unified to `7500000000` (~7.5 GB) matching 8.73 GB file, preventing truncated downloads from passing validation. — `install-core.ps1:38`, `linux/install-core.sh:83`
-
-**High**
-
-- **`start-windows.bat`: `findstr` logic** only set `NEEDS_FIX` if file lacked `LLM_PROVIDER=ollama` *and* contained `anythingllm_ollama`; a file with neither was treated as valid. Fixed to independent checks. — `start-windows.bat:49`
-- **`start-windows.bat`: `config.json` deletion** wiped user settings on every launch. Now wipes only `GPUCache/Cache/Code Cache/ShaderCache` under `anythingllm-desktop/`. — `start-windows.bat:119`
-- **`start-windows.bat`: blind `taskkill /IM ollama.exe`** killed any host Ollama. Now PID-tracked (`Start-Process -PassThru` + `.session_pids` + path-verified fallback) and health-polls 30 s before launching UI. — `start-windows.bat:92,146`
-- **`start-windows.bat`: silent failure when AnythingLLM missing** left orphan Ollama. Now kills PID and exits `1`. — `start-windows.bat:114`
-
-**Medium**
-
-- **`optimiced.bat`: `Get-WmiObject` deprecated → `Get-CimInstance`; `FREE_MB` unguarded numeric compare** could syntax-error when empty. Added guard and `usebackq` fix for `installed-models.txt` BOM. Token limit now preserved across restarts. — `optimiced.bat:31,48,135`
-- **`start-mac.command`: `/dev/tcp` port scan** always failed on macOS (no such pseudo-file). Replaced with `nc -z` / `lsof` / Python socket probe. DMG device parse `^/dev/disk[0-9]*s` missed `/dev/diskN` → now `/dev/disk[0-9][^ ]*`. Added `xargs -r`, preserved custom token limit, launch via `Contents/MacOS/AnythingLLM` binary so `--user-data-dir` is honored. — `start-mac.command:38,114,158,184,193,273`
-- **`linux/install.sh`: advertised “7 preset models”** — corrected to **6**. Paths clarified to `linux/start-linux.sh` / `linux/preflight-check.sh`. — `linux/install.sh:18,44`
-- **`linux/install-core.sh`: `cleanup_ollama` only `kill`** — added `kill -9` after 1 s grace. — `linux/install-core.sh:554`
-
----
-
-## Project Structure
-
-```
-Pendrive_X-version1/
-├── install.bat                 # Windows entry (→ install-core.ps1)
-├── install-core.ps1            # Windows core installer (PowerShell)
-├── start-windows.bat           # Windows launcher
-├── optimiced.bat               # Alt hardened Windows launcher (v0.07)
-├── start-mac.command            # macOS launcher
-├── linux/
-│   ├── install.sh              # Linux entry (→ preflight → install-core.sh)
-│   ├── install-core.sh         # Linux core installer (bash)
-│   ├── preflight-check.sh      # USB drive health check (space, FS, speed)
-│   └── start-linux.sh          # Linux launcher
-├── CODE_OF_CONDUCT.md
-├── CONTRIBUTING.md
-└── LICENSE                     # Apache 2.0
-```
-
-After install, the USB also contains `ollama/`, `ollama_mac/`, `models/`, `anythingllm*/`, `anythingllm_data/`, `installer_data/` as above.
-
----
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
-
-```bash
-git clone <repo-url>
-git checkout -b my-fix
-# make changes, test on Windows + Linux if possible
-git push -u origin my-fix
-# open a Pull Request
-```
-
-Please keep PRs focused and include the launcher(s) you tested.
-
----
-
 ## License
 
 Apache 2.0 — see [LICENSE](LICENSE).
 
 ```
-Copyright 2026-2027 Ifaz Md Zahin
+Copyright ©️ All Right Reserved @Ifaz Md Zahin
 ```
 
 ---
