@@ -156,7 +156,7 @@ renice -n -1 -p "$OLLAMA_PID" &>/dev/null || true
 echo -en "${DGRAY}  Waiting for Ollama to be ready...${NC}"
 MAX_WAIT=30
 READY=false
-for (( i=0; i<<MAX_WAIT; i++ )); do
+for (( i=0; i<MAX_WAIT; i++ )); do
     if curl -s "http://${OLLAMA_HOST}/api/tags" &>/dev/null; then
         echo -e "${GREEN} Ready!${NC}"
         READY=true

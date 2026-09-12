@@ -13,8 +13,18 @@ $script:ServerProcess = $null
 
 function Cleanup-Server {
     if ($script:ServerProcess -and -not $script:ServerProcess.HasExited) {
-        Stop-Process -Id $script:ServerProcess.Id -Force -ErrorAction SilentlyContinue
+        try { Stop-Process -Id $script:ServerProcess.Id -Force -ErrorAction SilentlyContinue } catch {}
         $script:ServerProcess = $null
+    }
+}
+
+# Cross-terminal "Press any key" helper — defined early so it can be used anywhere
+function Pause-AnyKey {
+    Write-Host "Press any key to close this installer..." -ForegroundColor Yellow
+    try {
+        $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+    } catch {
+        Read-Host "Press Enter to close" | Out-Null
     }
 }
 
@@ -23,6 +33,8 @@ trap {
     Cleanup-Server
     break
 }
+# Also handle PowerShell engine exit via Register-EngineEvent
+try { Register-EngineEvent PowerShell.Exiting -Action { Cleanup-Server } | Out-Null } catch {}
 
 # -----------------------------------------------------------------
 # MODEL CATALOG (All presets use Q5_K_M quantization from bartowski)
@@ -34,7 +46,7 @@ $ModelCatalog = @(
         File     = "NemoMix-Unleashed-12B-Q5_K_M.gguf"
         URL      = "https://huggingface.co/bartowski/NemoMix-Unleashed-12B-GGUF/resolve/main/NemoMix-Unleashed-12B-Q5_K_M.gguf"
         Size     = "8.73"
-        MinBytes = 7000000000
+        MinBytes = 7500000000
         Local    = "nemomix-local_X"
         Label    = "UNCENSORED"
         Badge    = "RECOMMENDED"
@@ -657,9 +669,15 @@ if (-Not (Test-Path $envFilePath)) {
     Set-Content -Path $envFilePath -Value $envContent -Force -Encoding UTF8
     Write-Host "      AnythingLLM configured to use: $firstModelLocal" -ForegroundColor Green
 } else {
-    $existing = Get-Content $envFilePath -Raw
+    $existing = Get-Content $envFilePath -Raw -ErrorAction SilentlyContinue
     if ($existing -match 'LLM_PROVIDER=ollama') {
+        # Preserve existing file but ensure OLLAMA_BASE_PATH points to expected port
+        # Update token limit only if user hasn't customized it — don't overwrite blindly
         Write-Host "      AnythingLLM already configured for Ollama." -ForegroundColor Green
+        # If the existing env is missing the model pref, patch it non-destructively
+        if ($existing -notmatch 'OLLAMA_MODEL_PREF=') {
+            Add-Content -Path $envFilePath -Value "OLLAMA_MODEL_PREF=$firstModelLocal" -Encoding UTF8
+        }
     } else {
         Set-Content -Path $envFilePath -Value $envContent -Force -Encoding UTF8
         Write-Host "      AnythingLLM reconfigured to use external Ollama." -ForegroundColor Green
@@ -714,13 +732,4 @@ Write-Host "  TIP: In AnythingLLM, go to Settings > LLM to switch" -ForegroundCo
 Write-Host "  between your installed models." -ForegroundColor DarkGray
 Write-Host ""
 
-# Cross-terminal "Press any key" fallback
-function Pause-AnyKey {
-    Write-Host "Press any key to close this installer..." -ForegroundColor Yellow
-    try {
-        $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown") | Out-Null
-    } catch {
-        Read-Host "Press Enter to close"
-    }
-}
 Pause-AnyKey

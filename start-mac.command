@@ -46,8 +46,10 @@ cleanup() {
     [[ -n "$OLLAMA_PID" ]] && kill "$OLLAMA_PID" 2>/dev/null || true
     [[ -n "$ANYTHINGLLM_PID" ]] && wait "$ANYTHINGLLM_PID" 2>/dev/null || true
     [[ -n "$OLLAMA_PID" ]] && wait "$OLLAMA_PID" 2>/dev/null || true
-    # Kill by path to avoid hitting a host Ollama
-    pgrep -f "$MAC_OLLAMA_DIR" | xargs kill -9 2>/dev/null || true
+    # Kill by path to avoid hitting a host Ollama (xargs -r avoids running kill with no input)
+    if command -v pgrep &>/dev/null; then
+        pgrep -f "$MAC_OLLAMA_DIR" 2>/dev/null | xargs -r kill -9 2>/dev/null || true
+    fi
     echo -e "${GREEN}[EXITO]${NC} AI shut down. You may safely eject the USB."
 }
 trap cleanup EXIT INT TERM HUP
@@ -110,9 +112,9 @@ if [ ! -d "$USB_DIR/anythingllm_mac/AnythingLLM.app" ]; then
     
     echo -e "${DGRAY}→ Extracting AnythingLLM to USB (please wait)...${NC}"
     
-    # Hardened DMG mount: capture the actual device node
+    # Hardened DMG mount: capture the actual device node (covers /dev/diskN and /dev/diskNsM)
     MOUNT_OUTPUT=$(hdiutil attach -nobrowse "$USB_DIR/anythingllm_mac/AnythingLLM_Installer.dmg" 2>&1)
-    DEV_NODE=$(echo "$MOUNT_OUTPUT" | grep -o '^/dev/disk[0-9]*s[0-9]*')
+    DEV_NODE=$(echo "$MOUNT_OUTPUT" | grep -o '/dev/disk[0-9][^[:space:]]*' | head -1)
     MOUNT_DIR=$(echo "$MOUNT_OUTPUT" | grep -o '/Volumes/[^[:space:]]*' | tail -1)
     
     if [ -z "$MOUNT_DIR" ] || [ ! -d "$MOUNT_DIR" ]; then
@@ -152,10 +154,21 @@ echo -e "${DGRAY}[STEP 3/7]${NC} Configuring portable runtime paths..."
 export OLLAMA_MODELS="$DATA_DIR"
 mkdir -p "$STORAGE_DIR/storage"
 
-# Find a free port to avoid collision with host Ollama
+# Find a free port to avoid collision with host Ollama (macOS-safe: use nc/lsof, not /dev/tcp)
 echo -e "${DGRAY}→ Scanning for available port (11434-11534)...${NC}"
+is_port_free() {
+    local p="$1"
+    if command -v nc &>/dev/null; then
+        ! nc -z 127.0.0.1 "$p" 2>/dev/null
+    elif command -v lsof &>/dev/null; then
+        ! lsof -iTCP:"$p" -sTCP:LISTEN -P -n 2>/dev/null | grep -q LISTEN
+    else
+        # fallback: try to bind with python3
+        python3 -c "import socket; s=socket.socket(); s.settimeout(1); exit(0 if s.connect_ex(('127.0.0.1', $p))!=0 else 1)" 2>/dev/null
+    fi
+}
 for port in $(seq 11434 11534); do
-    (exec 2>/dev/null; echo >/dev/tcp/127.0.0.1/$port) || { OLLAMA_PORT="$port"; break; }
+    if is_port_free "$port"; then OLLAMA_PORT="$port"; break; fi
 done
 export OLLAMA_HOST="127.0.0.1:$OLLAMA_PORT"
 echo -e "${GREEN}[✓]${NC} Ollama port allocated: ${CYAN}$OLLAMA_PORT${NC}"
@@ -181,23 +194,37 @@ ENV_FILE="$STORAGE_DIR/storage/.env"
 NEEDS_FIX=0
 if [ ! -f "$ENV_FILE" ]; then
     NEEDS_FIX=1
-elif ! grep -q "OLLAMA_BASE_PATH=http://127.0.0.1:$OLLAMA_PORT" "$ENV_FILE" 2>/dev/null; then
-    NEEDS_FIX=1
-elif grep -q "LLM_PROVIDER=anythingllm_ollama" "$ENV_FILE" 2>/dev/null; then
-    NEEDS_FIX=1
+else
+    if ! grep -q "OLLAMA_BASE_PATH=http://127.0.0.1:$OLLAMA_PORT" "$ENV_FILE" 2>/dev/null; then
+        NEEDS_FIX=1
+    fi
+    if grep -q "LLM_PROVIDER=anythingllm_ollama" "$ENV_FILE" 2>/dev/null; then
+        NEEDS_FIX=1
+    fi
+    if ! grep -q "LLM_PROVIDER=ollama" "$ENV_FILE" 2>/dev/null; then
+        NEEDS_FIX=1
+    fi
 fi
 
 if [ "$NEEDS_FIX" = "1" ]; then
     echo -e "${YELLOW}[CONFIG]${NC} Updating AnythingLLM to use external Ollama engine..."
+    # Preserve custom token limit if user edited it
+    TOKEN_LIMIT="4096"
+    if [ -f "$ENV_FILE" ]; then
+        EXISTING_LIMIT=$(grep -E "^OLLAMA_MODEL_TOKEN_LIMIT=" "$ENV_FILE" 2>/dev/null | cut -d= -f2 | tr -d '[:space:]')
+        if [ -n "$EXISTING_LIMIT" ] && [ "$EXISTING_LIMIT" -eq "$EXISTING_LIMIT" ] 2>/dev/null; then
+            TOKEN_LIMIT="$EXISTING_LIMIT"
+        fi
+    fi
     cat > "$ENV_FILE" << EOF
 LLM_PROVIDER=ollama
 OLLAMA_BASE_PATH=http://127.0.0.1:$OLLAMA_PORT
 OLLAMA_MODEL_PREF=$DEFAULT_MODEL
-OLLAMA_MODEL_TOKEN_LIMIT=4096
+OLLAMA_MODEL_TOKEN_LIMIT=$TOKEN_LIMIT
 EMBEDDING_ENGINE=native
 VECTOR_DB=lancedb
 EOF
-    echo -e "${GREEN}[✓]${NC} Configured: ${CYAN}$DEFAULT_MODEL${NC} @ port ${CYAN}$OLLAMA_PORT${NC}"
+    echo -e "${GREEN}[✓]${NC} Configured: ${CYAN}$DEFAULT_MODEL${NC} @ port ${CYAN}$OLLAMA_PORT${NC} (token_limit=$TOKEN_LIMIT)"
 else
     echo -e "${GREEN}[✓]${NC} Configuration already valid"
 fi
@@ -268,13 +295,17 @@ rm -rf "$ANYTHINGLLM_CACHE/Code Cache" 2>/dev/null || true
 rm -rf "$ANYTHINGLLM_CACHE/ShaderCache" 2>/dev/null || true
 echo -e "${DGRAY}[✓]${NC} Hardware caches cleared for portability"
 
-# Launch AnythingLLM from USB
+# Launch AnythingLLM from USB — prefer direct binary to ensure --user-data-dir is honored
 echo -e "${DGRAY}→ Opening AnythingLLM.app with USB-mounted user data...${NC}"
-open -a "$USB_DIR/anythingllm_mac/AnythingLLM.app" --args --user-data-dir="$STORAGE_DIR" >/dev/null 2>&1 &
+if [ -x "$USB_DIR/anythingllm_mac/AnythingLLM.app/Contents/MacOS/AnythingLLM" ]; then
+    "$USB_DIR/anythingllm_mac/AnythingLLM.app/Contents/MacOS/AnythingLLM" --user-data-dir="$STORAGE_DIR" >/dev/null 2>&1 &
+else
+    open -a "$USB_DIR/anythingllm_mac/AnythingLLM.app" --args --user-data-dir="$STORAGE_DIR" >/dev/null 2>&1 &
+fi
 
 # Capture PID (give it a moment to register)
 sleep 2
-ANYTHINGLLM_PID=$(pgrep -f "AnythingLLM.app" | head -1)
+ANYTHINGLLM_PID=$(pgrep -f "AnythingLLM" | head -1)
 [[ -n "$ANYTHINGLLM_PID" ]] && echo -e "${GREEN}[✓]${NC} Interface PID: ${CYAN}$ANYTHINGLLM_PID${NC}"
 
 echo ""

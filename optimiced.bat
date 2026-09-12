@@ -28,7 +28,14 @@ echo ===================================================
 :: ═══════════════════════════════════════════════════════════════
 :: 2. VERIFICACION DE ESPACIO EN DISCO (Locale-Independent)
 :: ═══════════════════════════════════════════════════════════════
-for /f "usebackq tokens=*" %%a in (`powershell -NoProfile -Command "try { $d='%USB_ROOT:~0,1%'; $free=(Get-WmiObject -Class Win32_LogicalDisk -Filter \"DeviceID='$d:'\").FreeSpace; if($free -ne $null){[math]::Round($free/1MB,0)}else{-1} } catch {-1}"`) do set "FREE_MB=%%a"
+set "FREE_MB=-1"
+for /f "usebackq tokens=*" %%a in (`powershell -NoProfile -Command "try { $d='%USB_ROOT:~0,1%'; $vol=Get-CimInstance -ClassName Win32_LogicalDisk -Filter \"DeviceID='$d:'\" -ErrorAction Stop; if($vol -and $vol.FreeSpace -ne $null){[math]::Round($vol.FreeSpace/1MB,0)}else{-1} } catch {-1}"`) do set "FREE_MB=%%a"
+if not defined FREE_MB set "FREE_MB=-1"
+
+:: Guard against empty or non-numeric FREE_MB before numeric compare
+set "FREE_MB_NUM=0"
+for /f "delims=0123456789-" %%x in ("%FREE_MB%") do set "FREE_MB_NUM=1"
+if "%FREE_MB_NUM%"=="1" set "FREE_MB=-1"
 
 if %FREE_MB% LSS 500 (
     if %FREE_MB% GTR 0 (
@@ -45,7 +52,7 @@ if %FREE_MB% LSS 500 (
 :: ═══════════════════════════════════════════════════════════════
 set "DEFAULT_MODEL=nemomix-local"
 if exist "%MODELS_DIR%\installed-models.txt" (
-    for /f "tokens=1 delims=|" %%a in ('type "%MODELS_DIR%\installed-models.txt"') do (
+    for /f "usebackq tokens=1 delims=|" %%a in ("%MODELS_DIR%\installed-models.txt") do (
         set "DEFAULT_MODEL=%%a"
         goto :GotModel
     )
@@ -128,21 +135,29 @@ goto :WaitForOllama
 :OllamaReady
 
 :: ═══════════════════════════════════════════════════════════════
-:: 9. CONFIGURAR ANYTHINGLLM (.env siempre sincronizado con puerto)
+:: 9. CONFIGURAR ANYTHINGLLM (.env — preserve custom token limit if user edited)
 :: ═══════════════════════════════════════════════════════════════
 if not exist "%DATA_DIR%\storage" mkdir "%DATA_DIR%\storage" 2>nul
 set "ENV_FILE=%DATA_DIR%\storage\.env"
+set "TOKEN_LIMIT=4096"
+if exist "%ENV_FILE%" (
+    for /f "usebackq tokens=1,2 delims==" %%a in ("%ENV_FILE%") do (
+        if /I "%%a"=="OLLAMA_MODEL_TOKEN_LIMIT" set "TOKEN_LIMIT=%%b"
+    )
+)
+:: Validate token limit is numeric, fallback to 4096
+for /f "delims=0123456789" %%x in ("%TOKEN_LIMIT%") do set "TOKEN_LIMIT=4096"
 
 (
     echo LLM_PROVIDER=ollama
     echo OLLAMA_BASE_PATH=http://%OLLAMA_HOST%
     echo OLLAMA_MODEL_PREF=%DEFAULT_MODEL%
-    echo OLLAMA_MODEL_TOKEN_LIMIT=4096
+    echo OLLAMA_MODEL_TOKEN_LIMIT=%TOKEN_LIMIT%
     echo EMBEDDING_ENGINE=native
     echo VECTOR_DB=lancedb
 ) > "%ENV_FILE%"
 
-echo [+] AnythingLLM configurado: %DEFAULT_MODEL% @ %OLLAMA_HOST%
+echo [+] AnythingLLM configurado: %DEFAULT_MODEL% @ %OLLAMA_HOST% (token_limit=%TOKEN_LIMIT%)
 
 :: ═══════════════════════════════════════════════════════════════
 :: 10. LANZAR ANYTHINGLLM (Modo Privacidad Maxima)

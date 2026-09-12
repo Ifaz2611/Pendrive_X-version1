@@ -49,10 +49,9 @@ set "NEEDS_FIX=0"
 if not exist "%ENV_FILE%" set "NEEDS_FIX=1"
 if exist "%ENV_FILE%" (
     findstr /C:"LLM_PROVIDER=ollama" "%ENV_FILE%" >nul 2>&1
-    if errorlevel 1 (
-        findstr /C:"LLM_PROVIDER=anythingllm_ollama" "%ENV_FILE%" >nul 2>&1
-        if not errorlevel 1 set "NEEDS_FIX=1"
-    )
+    if errorlevel 1 set "NEEDS_FIX=1"
+    findstr /C:"LLM_PROVIDER=anythingllm_ollama" "%ENV_FILE%" >nul 2>&1
+    if not errorlevel 1 set "NEEDS_FIX=1"
 )
 
 if "%NEEDS_FIX%"=="1" (
@@ -87,12 +86,36 @@ if exist "%~dp0models\installed-models.txt" (
     echo.
 )
 
-:: Start Ollama Engine silently in the background
+:: Start Ollama Engine silently in the background with PID capture
 echo Starting Ollama Engine...
-start "" /B "%~dp0ollama\ollama.exe" serve
+set "OLLAMA_PID="
+for /f "usebackq tokens=*" %%p in (`powershell -NoProfile -Command "$p=Start-Process -FilePath '%~dp0ollama\ollama.exe' -ArgumentList 'serve' -WindowStyle Hidden -PassThru; $p.Id"`) do set "OLLAMA_PID=%%p"
+if not defined OLLAMA_PID (
+    echo [WARN] Could not capture Ollama PID - fallback to background start
+    start "" /B "%~dp0ollama\ollama.exe" serve
+) else (
+    echo Ollama PID: %OLLAMA_PID%
+)
+set "PID_FILE=%~dp0anythingllm_data\.session_pids"
+if defined OLLAMA_PID echo %OLLAMA_PID% > "%PID_FILE%"
 
-:: Give it a few seconds to boot up
-timeout /t 3 >nul
+:: Health check: wait for Ollama API instead of blind 3s sleep
+echo Waiting for Ollama to be ready...
+set "OLLAMA_READY=0"
+for /L %%i in (1,1,30) do (
+    powershell -NoProfile -Command "try { Invoke-RestMethod -Uri 'http://127.0.0.1:11434/api/tags' -TimeoutSec 2 | Out-Null; exit 0 } catch { exit 1 }" >nul 2>&1
+    if not errorlevel 1 (
+        set "OLLAMA_READY=1"
+        goto :OllamaReady
+    )
+    timeout /t 1 /nobreak >nul
+)
+:OllamaReady
+if "%OLLAMA_READY%"=="0" (
+    echo [WARN] Ollama did not become ready in 30s - continuing anyway...
+) else (
+    echo Ollama is ready.
+)
 
 :: Find and launch AnythingLLM
 echo Starting AnythingLLM Interface...
@@ -110,15 +133,23 @@ dir "%~dp0anythingllm"
 echo.
 echo Please run install.bat first to download and extract everything.
 echo.
+:: Clean up orphan Ollama if we started one
+if defined OLLAMA_PID taskkill /PID %OLLAMA_PID% /T /F >nul 2>&1
+if exist "%PID_FILE%" del "%PID_FILE%" 2>nul
 pause
-exit /b
+exit /b 1
 
 :LaunchApp
-:: CRITICAL: We MUST wipe Electron path caches for true portability!
+:: CRITICAL: We MUST wipe ONLY hardware-dependent Electron caches for portability.
+:: Do NOT delete config.json — it holds user settings. Only wipe GPU/Shader caches.
 :: This fixes the "JavaScript error (ENOENT)" when moving USBs between PCs.
-if exist "%~dp0anythingllm_data\config.json" del /q "%~dp0anythingllm_data\config.json"
+set "ELECTRON_CACHE=%~dp0anythingllm_data\anythingllm-desktop"
+if exist "%ELECTRON_CACHE%\GPUCache" rmdir /s /q "%ELECTRON_CACHE%\GPUCache"
+if exist "%ELECTRON_CACHE%\Cache" rmdir /s /q "%ELECTRON_CACHE%\Cache"
+if exist "%ELECTRON_CACHE%\Code Cache" rmdir /s /q "%ELECTRON_CACHE%\Code Cache"
+if exist "%ELECTRON_CACHE%\ShaderCache" rmdir /s /q "%ELECTRON_CACHE%\ShaderCache"
+:: Legacy fallback — older versions stored cache at root
 if exist "%~dp0anythingllm_data\Cache" rmdir /s /q "%~dp0anythingllm_data\Cache"
-if exist "%~dp0anythingllm_data\Code Cache" rmdir /s /q "%~dp0anythingllm_data\Code Cache"
 if exist "%~dp0anythingllm_data\GPUCache" rmdir /s /q "%~dp0anythingllm_data\GPUCache"
 
 :: CRITICAL: We MUST pushd into the app directory for the portable app to find its own resources!
@@ -142,9 +173,18 @@ echo Press any key to SHUT DOWN the AI safely...
 echo.
 pause
 
-:: Clean shutdown
-taskkill /F /IM "ollama.exe" >nul 2>&1
+:: Clean shutdown — kill only OUR PIDs, never a host Ollama blindly
+if defined OLLAMA_PID (
+    taskkill /PID %OLLAMA_PID% /T /F >nul 2>&1
+) else if exist "%PID_FILE%" (
+    for /f "tokens=1" %%a in (%PID_FILE%) do taskkill /PID %%a /T /F >nul 2>&1
+    del "%PID_FILE%" 2>nul
+) else (
+    :: Last resort: only kill ollama.exe that lives on THIS USB path
+    for /f "usebackq tokens=*" %%p in (`powershell -NoProfile -Command "Get-Process ollama -ErrorAction SilentlyContinue | Where-Object {$_.Path -eq '%~dp0ollama\ollama.exe'} | Select-Object -ExpandProperty Id -First 1"`) do taskkill /PID %%p /T /F >nul 2>&1
+)
 taskkill /F /IM "AnythingLLM.exe" >nul 2>&1
+if exist "%PID_FILE%" del "%PID_FILE%" 2>nul
 echo.
 echo AI Engine shut down. You may safely eject the USB.
 timeout /t 3 >nul
