@@ -37,7 +37,8 @@ MIN_WRITE_MBPS=10
 REC_WRITE_MBPS=25
 MIN_READ_MBPS=20
 REC_READ_MBPS=50
-BENCH_SIZE_MB=128
+BENCH_SIZE_MB=64
+# Use /dev/zero with direct I/O — faster and deterministic on flash; /dev/urandom is CPU-bound
 
 # ── Paths ─────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -550,8 +551,8 @@ echo -e "  ${DGRAY}│${NC}  ${GREEN}Llama 3.2 3B Instruct${NC}      ~2.0 GB   L
 echo -e "  ${DGRAY}│${NC}  ${GREEN}Phi-3.5 Mini 3.8B${NC}          ~2.2 GB   LIGHTWEIGHT"
 echo -e "  ${DGRAY}│${NC}  ${CYAN}Mistral 7B Instruct v0.3${NC}   ~4.1 GB   STANDARD"
 echo -e "  ${DGRAY}│${NC}  ${CYAN}Qwen 2.5 7B Instruct${NC}       ~4.7 GB   STANDARD"
-echo -e "  ${DGRAY}│${NC}  ${CYAN}Dolphin 2.9 Llama 3 8B${NC}     ~4.9 GB   STANDARD"
-echo -e "  ${DGRAY}│${NC}  ${MAGENTA}NemoMix Unleashed 12B${NC}      ~7.0 GB   LARGE"
+echo -e "  ${DGRAY}│${NC}  ${CYAN}Dolphin 2.9 Llama 3 8B${NC}     ~4.9 GB   UNCENSORED"
+echo -e "  ${DGRAY}│${NC}  ${MAGENTA}NemoMix Unleashed 12B${NC}      ~8.73 GB  UNCENSORED"
 echo -e "  ${DGRAY}│${NC}  ${DGRAY}Ollama engine + AppImage   ~1.0 GB   REQUIRED${NC}"
 echo -e "  ${DGRAY}└───────────────────────────────────────────────────────┘${NC}"
 
@@ -564,7 +565,9 @@ echo -e "  ${DGRAY}Using a ${BENCH_SIZE_MB} MB temporary test file on:${NC}"
 echo -e "  ${DGRAY}${TARGET_MOUNT}${NC}"
 
 TMPFILE="$TARGET_MOUNT/.preflight_bench_$$.tmp"
-
+# Ensure bench file cleaned even on Ctrl+C
+trap 'rm -f "$TMPFILE" 2>/dev/null || true' EXIT INT TERM
+# Restore trap later for final verdict — keep bench cleanup
 if $MOUNT_IS_READONLY; then
   echo ""
   result_warn "Skipping write/read benchmark because the mount is read-only"
@@ -583,7 +586,7 @@ WRITE_OK=false
 
 if command -v dd &>/dev/null; then
   T_START=$(date +%s%N 2>/dev/null || echo 0)
-  dd if=/dev/urandom of="$TMPFILE" bs=1M count="$BENCH_SIZE_MB" conv=fsync 2>/dev/null
+  dd if=/dev/zero of="$TMPFILE" bs=1M count="$BENCH_SIZE_MB" conv=fsync oflag=direct 2>/dev/null || dd if=/dev/zero of="$TMPFILE" bs=1M count="$BENCH_SIZE_MB" conv=fsync 2>/dev/null
   T_END=$(date +%s%N 2>/dev/null || echo 0)
   T_NS=$(( T_END - T_START ))
   if (( T_NS > 0 )); then

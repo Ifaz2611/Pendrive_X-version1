@@ -25,8 +25,8 @@ We'd also love PRs. If you're thinking of a large PR, we advise opening up an is
 
 Here are a few things you can do that will increase the likelihood of your pull request being accepted:
 
-- Follow the [style guide][style] which is using standard. Any linting errors should be shown when running.
-- Write and update tests.
+- **Lint:** `shellcheck linux/*.sh start-mac.command` and `Invoke-ScriptAnalyzer -Path install-core.ps1` must be clean; `markdownlint README.md`.
+- **Tests:** Run `linux/preflight-check.sh` and launcher dry-runs on Win/Linux/macOS with spaces in USB path.
 - Keep your changes as focused as possible. If there are multiple changes you would like to make that are not dependent upon each other, consider submitting them as separate pull requests.
 - Write a [good commit message](http://tbaggery.com/2008/04/19/a-note-about-git-commit-messages.html).
 

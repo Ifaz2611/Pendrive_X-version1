@@ -54,7 +54,7 @@ Choose during install (interactive menu: `1,3` or `all` or `1,c` for custom).
 
 > `UNCENSORED` = no content filters. `STANDARD` = normal safety guidelines.
 
-Update the catalog in `install-core.ps1:30` / `linux/install-core.sh:80` if you need a different quantization.
+Update the catalog in `models/catalog.json` (single source) or `install-core.ps1:42` / `linux/install-core.sh:80` if you need a different quantization. Pinned engine URLs in `versions.env`.
 
 ---
 
@@ -251,6 +251,7 @@ Re-running the *installer* (`install.bat` / `install-core.sh`) will still honor 
 | `xargs: kill: No such process` on macOS exit | Fixed — now uses `xargs -r`. |
 | Slow writes / AI loads 30+ s | USB 2.0 stick in USB 2.0 port. Use USB 3.0 drive in a blue USB 3.0 port. Check `preflight-check.sh` benchmark. |
 | Nothing happens double-clicking `.command` on Mac | Right-click → Open, or `chmod +x start-mac.command` then double-click. Gatekeeper: `xattr -rc anythingllm_mac/AnythingLLM.app` is done automatically. |
+| Need diagnostics | Run `doctor.bat` (Windows) or `bash doctor.sh` (Linux/macOS) — checks FS, RAM, models, ports, logs. |
 
 ---
 

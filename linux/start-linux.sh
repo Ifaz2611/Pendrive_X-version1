@@ -13,6 +13,16 @@ NC='\033[0m'
 
 USB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Allow USB_DIR override: bash start-linux.sh /path/to/usb
+if [[ -n "${1:-}" && -d "$1" ]]; then USB_DIR="$(cd "$1" && pwd)"; fi
+
+# ── Logging
+LOG_DIR="$USB_DIR/anythingllm_data/logs"
+mkdir -p "$LOG_DIR" 2>/dev/null || true
+LOG_FILE="$LOG_DIR/launcher-$(date +%Y%m%d-%H%M%S).log"
+exec > >(tee -a "$LOG_FILE") 2>&1
+echo "[$(date)] Launcher Linux started — USB: $USB_DIR"
+
 # ── State for cleanup ─────────────────────────────────────────
 OLLAMA_PID=""
 ANYTHINGLLM_PID=""
@@ -60,13 +70,23 @@ mkdir -p \
 OLLAMA_BIN="$USB_DIR/ollama/ollama"
 APPIMAGE="$USB_DIR/anythingllm/AnythingLLM.AppImage"
 
-# ── Find a free port for Ollama ─────────────────────────────────
+# ── Find a free port for Ollama (portable: nc -> lsof -> python3, not /dev/tcp)
+is_port_free() {
+    local p="$1"
+    if command -v nc &>/dev/null; then
+        ! nc -z 127.0.0.1 "$p" 2>/dev/null
+    elif command -v lsof &>/dev/null; then
+        ! lsof -iTCP:"$p" -sTCP:LISTEN -P -n 2>/dev/null | grep -q LISTEN
+    else
+        python3 -c "import socket; s=socket.socket(); s.settimeout(1); exit(0 if s.connect_ex(('127.0.0.1', $p))!=0 else 1)" 2>/dev/null
+    fi
+}
 find_free_port() {
     local port
     for port in $(seq 11434 11534); do
-        (exec 2>/dev/null; echo >/dev/tcp/127.0.0.1/$port) || { echo "$port"; return 0; }
+        if is_port_free "$port"; then echo "$port"; return 0; fi
     done
-    echo "11434"  # fallback: will fail later if truly occupied
+    echo "11434"
 }
 OLLAMA_PORT=$(find_free_port)
 OLLAMA_HOST="127.0.0.1:${OLLAMA_PORT}"
@@ -82,7 +102,7 @@ if [[ -f "$MODELS_FILE" ]]; then
     DEFAULT_MODEL="${FIRST_LINE%%|*}"
 fi
 
-# ── Configure .env ──────────────────────────────────────────────
+# ── Configure .env — preserve custom token limit, patch port dynamically
 ENV_FILE="$STORAGE_DIR/storage/.env"
 needs_fix=false
 
@@ -90,7 +110,16 @@ needs_fix=false
 if [[ -f "$ENV_FILE" ]]; then
     grep -q "LLM_PROVIDER=ollama" "$ENV_FILE" || needs_fix=true
     grep -q "LLM_PROVIDER=anythingllm_ollama" "$ENV_FILE" && needs_fix=true
-    grep -q "OLLAMA_BASE_PATH=http://${OLLAMA_HOST}" "$ENV_FILE" || needs_fix=true
+    # Don't require exact port match — dynamic port changes each run; only fix if provider wrong
+fi
+
+# Read existing token limit if present (preserve user customization)
+EXISTING_LIMIT="4096"
+if [[ -f "$ENV_FILE" ]]; then
+    EXISTING_LIMIT=$(grep -E "^OLLAMA_MODEL_TOKEN_LIMIT=" "$ENV_FILE" 2>/dev/null | cut -d= -f2 | tr -d '[:space:]' || echo 4096)
+    [[ -z "$EXISTING_LIMIT" ]] && EXISTING_LIMIT="4096"
+    # validate numeric
+    [[ "$EXISTING_LIMIT" =~ ^[0-9]+$ ]] || EXISTING_LIMIT="4096"
 fi
 
 if $needs_fix; then
@@ -99,11 +128,17 @@ if $needs_fix; then
 LLM_PROVIDER=ollama
 OLLAMA_BASE_PATH=http://${OLLAMA_HOST}
 OLLAMA_MODEL_PREF=${DEFAULT_MODEL}
-OLLAMA_MODEL_TOKEN_LIMIT=4096
+OLLAMA_MODEL_TOKEN_LIMIT=${EXISTING_LIMIT}
 EMBEDDING_ENGINE=native
 VECTOR_DB=lancedb
 EOF
-    echo -e "${GREEN}Done. Default model: ${DEFAULT_MODEL} @ ${OLLAMA_HOST}${NC}"
+    echo -e "${GREEN}Done. Default model: ${DEFAULT_MODEL} @ ${OLLAMA_HOST} (token_limit=$EXISTING_LIMIT)${NC}"
+else
+    # Patch only the base path to current dynamic port, preserving token limit and other keys
+    if [[ -f "$ENV_FILE" ]]; then
+        sed -i "s|^OLLAMA_BASE_PATH=.*|OLLAMA_BASE_PATH=http://${OLLAMA_HOST}|" "$ENV_FILE" 2>/dev/null || true
+        echo -e "${DGRAY}  Patched OLLAMA_BASE_PATH to http://${OLLAMA_HOST} (preserved token_limit=$EXISTING_LIMIT)${NC}"
+    fi
 fi
 
 # ── Show installed models ─────────────────────────────────────

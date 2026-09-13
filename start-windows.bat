@@ -1,4 +1,5 @@
 @echo off
+setlocal enabledelayedexpansion
 title PENDRIVE_X AI - Launcher
 color 0A
 
@@ -7,32 +8,65 @@ echo     Launching PENDRIVE_X Engine from USB...
 echo ===================================================
 
 :: -------------------------------------------------------
+:: LOGGING — tee to anythingllm_data\logs\launcher-*.log
+:: -------------------------------------------------------
+set "LOG_DIR=%~dp0anythingllm_data\logs"
+if not exist "%LOG_DIR%" mkdir "%LOG_DIR%" 2>nul
+for /f "tokens=1-3 delims=/ " %%a in ('date /t') do set "LOG_DATE=%%c-%%a-%%b"
+for /f "tokens=1-2 delims=: " %%a in ('time /t') do set "LOG_TIME=%%a%%b"
+set "LOG_FILE=%LOG_DIR%\launcher-%LOG_DATE%-%LOG_TIME%.log"
+:: Simple log: append key events
+echo [%date% %time%] Launcher started >> "%LOG_FILE%" 2>nul
+
+:: -------------------------------------------------------
+:: FAT32 GUARD — mirror preflight-check.sh:484
+:: -------------------------------------------------------
+for /f "usebackq tokens=*" %%a in (`powershell -NoProfile -Command "try{$d='%~d0'; $v=Get-CimInstance -ClassName Win32_LogicalDisk -Filter \"DeviceID='$d'\" -ErrorAction Stop; $v.FileSystem} catch {''}"`) do set "FS_TYPE=%%a"
+if /I "%FS_TYPE%"=="FAT32" (
+    echo [ERROR] FAT32 filesystem detected on %~d0 — 4 GB per-file limit will block GGUF models ^! >> "%LOG_FILE%" 2>nul
+    echo.
+    echo ERROR: FAT32 filesystem detected — Reformat USB as exFAT ^(Right-click drive -^> Format -^> exFAT^).
+    echo Current FS: %FS_TYPE% on %~d0
+    pause
+    exit /b 1
+)
+if /I "%FS_TYPE%"=="FAT" (
+    echo [ERROR] FAT filesystem detected — Reformat as exFAT. >> "%LOG_FILE%" 2>nul
+    echo ERROR: FAT filesystem not supported — Reformat as exFAT.
+    pause
+    exit /b 1
+)
+
+:: -------------------------------------------------------
 :: IMPORTANT: All paths must point to USB, not the PC!
 :: -------------------------------------------------------
-
-:: Set Ollama model data path to the USB drive
+:: Use quoted assignments to handle spaces in USB path (e.g. "Pendrive X/Test Drive")
 set "OLLAMA_MODELS=%~dp0ollama\data"
-
-:: Tell AnythingLLM to store ALL its data on the USB
-:: STORAGE_DIR is the official AnythingLLM portable env var
 set "STORAGE_DIR=%~dp0anythingllm_data"
 set "ANYTHINGLLM_PROFILE=%STORAGE_DIR%\anythingllm-desktop"
-set "ROAMING_PROFILE=%USERPROFILE%\AppData\Roaming\anythingllm-desktop"
-set "PROFILE_BACKUP=%USERPROFILE%\AppData\Roaming\anythingllm-desktop.host-backup"
-
-:: Also override APPDATA AND XDG paths for Electron safety net
 set "APPDATA=%~dp0anythingllm_data"
 set "LOCALAPPDATA=%~dp0anythingllm_data"
 
 :: Create the data folder on USB if it doesn't exist
-if not exist "%~dp0anythingllm_data" mkdir "%~dp0anythingllm_data"
-if not exist "%ANYTHINGLLM_PROFILE%" mkdir "%ANYTHINGLLM_PROFILE%"
+if not exist "%~dp0anythingllm_data" mkdir "%~dp0anythingllm_data" 2>nul
+if not exist "%ANYTHINGLLM_PROFILE%" mkdir "%ANYTHINGLLM_PROFILE%" 2>nul
+if not exist "%LOG_DIR%" mkdir "%LOG_DIR%" 2>nul
 
 :: -------------------------------------------------------
-:: ENSURE ANYTHINGLLM USES EXTERNAL OLLAMA (not built-in)
+:: DYNAMIC PORT — avoid collision with host Ollama (like optimiced.bat:76)
+:: -------------------------------------------------------
+set "OLLAMA_PORT="
+for /f "usebackq tokens=*" %%p in (`powershell -NoProfile -Command "$l=New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback,0); $l.Start(); $p=$l.LocalEndpoint.Port; $l.Stop(); $p"`) do set "OLLAMA_PORT=%%p"
+if not defined OLLAMA_PORT set "OLLAMA_PORT=11434"
+set "OLLAMA_HOST=127.0.0.1:%OLLAMA_PORT%"
+echo [+] Ollama port allocated: %OLLAMA_PORT%
+echo [%date% %time%] Port %OLLAMA_PORT% >> "%LOG_FILE%" 2>nul
+
+:: -------------------------------------------------------
+:: ENSURE ANYTHINGLLM USES EXTERNAL OLLAMA (not built-in) — preserve token limit
 :: -------------------------------------------------------
 set "ENV_FILE=%~dp0anythingllm_data\storage\.env"
-if not exist "%~dp0anythingllm_data\storage" mkdir "%~dp0anythingllm_data\storage"
+if not exist "%~dp0anythingllm_data\storage" mkdir "%~dp0anythingllm_data\storage" 2>nul
 
 :: Read the first model from installed-models.txt if it exists
 set "DEFAULT_MODEL=nemomix-local"
@@ -43,6 +77,8 @@ if exist "%~dp0models\installed-models.txt" (
     )
 )
 :GotModel
+:: Migrate legacy alias if present
+if "%DEFAULT_MODEL%"=="nemomix-local_X" set "DEFAULT_MODEL=nemomix-local"
 
 :: Check if .env needs fixing (missing or using built-in ollama)
 set "NEEDS_FIX=0"
@@ -54,25 +90,35 @@ if exist "%ENV_FILE%" (
     if not errorlevel 1 set "NEEDS_FIX=1"
 )
 
+:: Preserve custom token limit if user edited it (like optimiced.bat:142)
+set "TOKEN_LIMIT=4096"
+if exist "%ENV_FILE%" (
+    for /f "usebackq tokens=1,2 delims==" %%a in ("%ENV_FILE%") do (
+        if /I "%%a"=="OLLAMA_MODEL_TOKEN_LIMIT" set "TOKEN_LIMIT=%%b"
+    )
+)
+:: Validate numeric
+for /f "delims=0123456789" %%x in ("%TOKEN_LIMIT%") do set "TOKEN_LIMIT=4096"
+if "%TOKEN_LIMIT%"=="" set "TOKEN_LIMIT=4096"
+
 if "%NEEDS_FIX%"=="1" (
     echo Configuring AnythingLLM to use external Ollama engine...
+    echo [%date% %time%] Configuring .env DEFAULT_MODEL=%DEFAULT_MODEL% TOKEN_LIMIT=%TOKEN_LIMIT% >> "%LOG_FILE%" 2>nul
     (
         echo LLM_PROVIDER=ollama
-        echo OLLAMA_BASE_PATH=http://127.0.0.1:11434
+        echo OLLAMA_BASE_PATH=http://%OLLAMA_HOST%
         echo OLLAMA_MODEL_PREF=%DEFAULT_MODEL%
-        echo OLLAMA_MODEL_TOKEN_LIMIT=4096
+        echo OLLAMA_MODEL_TOKEN_LIMIT=%TOKEN_LIMIT%
         echo EMBEDDING_ENGINE=native
         echo VECTOR_DB=lancedb
     ) > "%ENV_FILE%"
-    echo Done. Default model: %DEFAULT_MODEL%
+    echo Done. Default model: %DEFAULT_MODEL% @ %OLLAMA_HOST% ^(token_limit=%TOKEN_LIMIT%^)
+) else (
+    :: Even if not NEEDS_FIX, ensure OLLAMA_BASE_PATH points to current dynamic port, preserving token limit
+    :: Patch port without clobbering token limit
+    powershell -NoProfile -Command "$f='%ENV_FILE%'; $c=Get-Content $f -Raw -ErrorAction SilentlyContinue; if($c){ $c=$c -replace 'OLLAMA_BASE_PATH=http://[^\r\n]+', 'OLLAMA_BASE_PATH=http://%OLLAMA_HOST%'; Set-Content -Path $f -Value $c -NoNewline -Encoding UTF8 }" >nul 2>&1
+    echo [+] Patched OLLAMA_BASE_PATH to %OLLAMA_HOST% ^(preserved token_limit=%TOKEN_LIMIT%^)
 )
-
-:: -------------------------------------------------------
-:: PROFILE REDIRECT PREVENTED
-:: -------------------------------------------------------
-:: Electron '--user-data-dir' completely overrides profile creation,
-:: ensuring Everything is purely portable on the USB drive.
-
 
 :: -------------------------------------------------------
 :: SHOW INSTALLED MODELS
@@ -86,24 +132,30 @@ if exist "%~dp0models\installed-models.txt" (
     echo.
 )
 
-:: Start Ollama Engine silently in the background with PID capture
-echo Starting Ollama Engine...
+:: Start Ollama Engine silently in the background with PID capture — use quoted path for spaces
+echo Starting Ollama Engine on %OLLAMA_HOST%...
 set "OLLAMA_PID="
-for /f "usebackq tokens=*" %%p in (`powershell -NoProfile -Command "$p=Start-Process -FilePath '%~dp0ollama\ollama.exe' -ArgumentList 'serve' -WindowStyle Hidden -PassThru; $p.Id"`) do set "OLLAMA_PID=%%p"
+:: Escape single quotes in path for PowerShell by doubling them
+set "OLLAMA_EXE=%~dp0ollama\ollama.exe"
+for /f "usebackq tokens=*" %%p in (`powershell -NoProfile -Command "$p=Start-Process -FilePath '%OLLAMA_EXE%' -ArgumentList 'serve' -WindowStyle Hidden -PassThru; $p.Id"`) do set "OLLAMA_PID=%%p"
 if not defined OLLAMA_PID (
     echo [WARN] Could not capture Ollama PID - fallback to background start
+    echo [%date% %time%] WARN PID capture failed, fallback >> "%LOG_FILE%" 2>nul
     start "" /B "%~dp0ollama\ollama.exe" serve
 ) else (
     echo Ollama PID: %OLLAMA_PID%
+    echo [%date% %time%] Ollama PID %OLLAMA_PID% >> "%LOG_FILE%" 2>nul
+    :: Bump priority if permitted (best-effort)
+    powershell -NoProfile -Command "(Get-Process -Id %OLLAMA_PID% -ErrorAction SilentlyContinue).PriorityClass = 'AboveNormal'" >nul 2>&1
 )
 set "PID_FILE=%~dp0anythingllm_data\.session_pids"
 if defined OLLAMA_PID echo %OLLAMA_PID% > "%PID_FILE%"
 
-:: Health check: wait for Ollama API instead of blind 3s sleep
+:: Health check: wait for Ollama API instead of blind 3s sleep — use dynamic host
 echo Waiting for Ollama to be ready...
 set "OLLAMA_READY=0"
 for /L %%i in (1,1,30) do (
-    powershell -NoProfile -Command "try { Invoke-RestMethod -Uri 'http://127.0.0.1:11434/api/tags' -TimeoutSec 2 | Out-Null; exit 0 } catch { exit 1 }" >nul 2>&1
+    powershell -NoProfile -Command "try { Invoke-RestMethod -Uri 'http://%OLLAMA_HOST%/api/tags' -TimeoutSec 2 | Out-Null; exit 0 } catch { exit 1 }" >nul 2>&1
     if not errorlevel 1 (
         set "OLLAMA_READY=1"
         goto :OllamaReady
@@ -113,6 +165,7 @@ for /L %%i in (1,1,30) do (
 :OllamaReady
 if "%OLLAMA_READY%"=="0" (
     echo [WARN] Ollama did not become ready in 30s - continuing anyway...
+    echo [%date% %time%] WARN Ollama not ready 30s >> "%LOG_FILE%" 2>nul
 ) else (
     echo Ollama is ready.
 )
@@ -142,19 +195,18 @@ exit /b 1
 :LaunchApp
 :: CRITICAL: We MUST wipe ONLY hardware-dependent Electron caches for portability.
 :: Do NOT delete config.json — it holds user settings. Only wipe GPU/Shader caches.
-:: This fixes the "JavaScript error (ENOENT)" when moving USBs between PCs.
 set "ELECTRON_CACHE=%~dp0anythingllm_data\anythingllm-desktop"
-if exist "%ELECTRON_CACHE%\GPUCache" rmdir /s /q "%ELECTRON_CACHE%\GPUCache"
-if exist "%ELECTRON_CACHE%\Cache" rmdir /s /q "%ELECTRON_CACHE%\Cache"
-if exist "%ELECTRON_CACHE%\Code Cache" rmdir /s /q "%ELECTRON_CACHE%\Code Cache"
-if exist "%ELECTRON_CACHE%\ShaderCache" rmdir /s /q "%ELECTRON_CACHE%\ShaderCache"
+if exist "%ELECTRON_CACHE%\GPUCache" rmdir /s /q "%ELECTRON_CACHE%\GPUCache" 2>nul
+if exist "%ELECTRON_CACHE%\Cache" rmdir /s /q "%ELECTRON_CACHE%\Cache" 2>nul
+if exist "%ELECTRON_CACHE%\Code Cache" rmdir /s /q "%ELECTRON_CACHE%\Code Cache" 2>nul
+if exist "%ELECTRON_CACHE%\ShaderCache" rmdir /s /q "%ELECTRON_CACHE%\ShaderCache" 2>nul
 :: Legacy fallback — older versions stored cache at root
-if exist "%~dp0anythingllm_data\Cache" rmdir /s /q "%~dp0anythingllm_data\Cache"
-if exist "%~dp0anythingllm_data\GPUCache" rmdir /s /q "%~dp0anythingllm_data\GPUCache"
+if exist "%~dp0anythingllm_data\Cache" rmdir /s /q "%~dp0anythingllm_data\Cache" 2>nul
+if exist "%~dp0anythingllm_data\GPUCache" rmdir /s /q "%~dp0anythingllm_data\GPUCache" 2>nul
 
 :: CRITICAL: We MUST pushd into the app directory for the portable app to find its own resources!
 pushd "%~dp0anythingllm"
-:: Pass --user-data-dir 
+:: Pass --user-data-dir — quoted for spaces
 start "" "AnythingLLM.exe" --user-data-dir="%~dp0anythingllm_data"
 popd
 
@@ -162,6 +214,8 @@ popd
 echo.
 echo ===================================================
 echo   SYSTEM ONLINE: Your AI is running from the USB!  
+echo   Ollama API: http://%OLLAMA_HOST%
+echo   Model: %DEFAULT_MODEL% (token_limit=%TOKEN_LIMIT%)
 echo ===================================================
 echo.
 echo You can now use the AnythingLLM window to chat.
@@ -180,11 +234,13 @@ if defined OLLAMA_PID (
     for /f "tokens=1" %%a in (%PID_FILE%) do taskkill /PID %%a /T /F >nul 2>&1
     del "%PID_FILE%" 2>nul
 ) else (
-    :: Last resort: only kill ollama.exe that lives on THIS USB path
-    for /f "usebackq tokens=*" %%p in (`powershell -NoProfile -Command "Get-Process ollama -ErrorAction SilentlyContinue | Where-Object {$_.Path -eq '%~dp0ollama\ollama.exe'} | Select-Object -ExpandProperty Id -First 1"`) do taskkill /PID %%p /T /F >nul 2>&1
+    :: Last resort: only kill ollama.exe that lives on THIS USB path — quoted for spaces
+    for /f "usebackq tokens=*" %%p in (`powershell -NoProfile -Command "Get-Process ollama -ErrorAction SilentlyContinue | Where-Object {$_.Path -eq '%OLLAMA_EXE%'} | Select-Object -ExpandProperty Id -First 1"`) do taskkill /PID %%p /T /F >nul 2>&1
 )
 taskkill /F /IM "AnythingLLM.exe" >nul 2>&1
 if exist "%PID_FILE%" del "%PID_FILE%" 2>nul
+echo [%date% %time%] Shutdown complete >> "%LOG_FILE%" 2>nul
 echo.
 echo AI Engine shut down. You may safely eject the USB.
 timeout /t 3 >nul
+endlocal

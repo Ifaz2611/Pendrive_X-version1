@@ -1,0 +1,26 @@
+# Pendrive_X — ignore large USB payloads
+models/*.gguf
+models/*.part
+models/SHA256SUMS
+ollama/
+ollama/data/
+ollama/*.zip
+ollama/*.tgz
+ollama/*.tar.*
+ollama_mac/
+anythingllm/
+anythingllm_mac/
+anythingllm_data/
+!anythingllm_data/.gitkeep
+installer_data/
+logs/
+*.log
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.tmp
+.preflight_bench*.tmp
+.env
+.venv
+__pycache__/
+*.pyc

@@ -25,13 +25,65 @@ echo -e "${CYAN}║${NC}  ${YELLOW}Multi-Model Edition | Linux Environment${NC} 
 echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝${NC}"
 echo -e "\n${DGRAY}[INIT]${NC} Loading environment variables..."
 
-# USB root = first argument if provided, otherwise the folder containing this script
-if [[ -n "${1:-}" && -d "$1" ]]; then
-    USB_DIR="$(cd "$1" && pwd)"
-    echo -e "${GREEN}[✓]${NC} ${YELLOW}Target directory overridden to:${NC} ${CYAN}${USB_DIR}${NC}"
-else
+# ── CLI flags: --models 1,3 --custom-url https://... --custom-name mymodel --yes --help
+CLI_MODELS="" CLI_CUSTOM_URL="" CLI_CUSTOM_NAME="" CLI_YES=false
+for arg in "$@"; do
+  case "$arg" in
+    --help|-h) echo "Usage: bash install-core.sh [USB_DIR] [--models 1,3|all] [--custom-url https://...gguf] [--custom-name mymodel-local] [--yes]"; exit 0 ;;
+    --models=*) CLI_MODELS="${arg#--models=}" ;;
+    --custom-url=*) CLI_CUSTOM_URL="${arg#--custom-url=}" ;;
+    --custom-name=*) CLI_CUSTOM_NAME="${arg#--custom-name=}" ;;
+    --yes) CLI_YES=true ;;
+  esac
+done
+# Also support separated form --models 1,3
+for (( i=1; i<=$#; i++ )); do
+  eval "arg=\${$i}"
+  case "$arg" in
+    --models) nxt=$((i+1)); eval "CLI_MODELS=\${$nxt:-}";;
+    --custom-url) nxt=$((i+1)); eval "CLI_CUSTOM_URL=\${$nxt:-}";;
+    --custom-name) nxt=$((i+1)); eval "CLI_CUSTOM_NAME=\${$nxt:-}";;
+  esac
+done
+
+# USB root = first directory argument if provided, otherwise the folder containing this script
+USB_DIR=""
+for a in "$@"; do
+  if [[ -d "$a" && "$a" != --* ]]; then USB_DIR="$(cd "$a" && pwd)"; break; fi
+done
+if [[ -z "$USB_DIR" ]]; then
     USB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     echo -e "${GREEN}[✓]${NC} ${GRAY}Auto-detected script directory:${NC} ${CYAN}${USB_DIR}${NC}"
+else
+    echo -e "${GREEN}[✓]${NC} ${YELLOW}Target directory overridden to:${NC} ${CYAN}${USB_DIR}${NC}"
+fi
+
+# ── Load pinned versions
+if [[ -f "$USB_DIR/../versions.env" ]]; then
+  # when USB_DIR is linux/ subdir
+  set -a; source "$USB_DIR/../versions.env" 2>/dev/null || true; set +a
+elif [[ -f "$USB_DIR/versions.env" ]]; then
+  set -a; source "$USB_DIR/versions.env" 2>/dev/null || true; set +a
+fi
+
+# ── Logging
+LOG_DIR="$USB_DIR/installer_data/logs"
+mkdir -p "$LOG_DIR" 2>/dev/null || true
+LOG_FILE="$LOG_DIR/install-$(date +%Y%m%d-%H%M%S).log"
+echo "[$(date)] Install started — USB: $USB_DIR" >> "$LOG_FILE" 2>/dev/null || true
+echo -e "${DGRAY}[LOG]${NC} Logging to ${CYAN}$LOG_FILE${NC}"
+
+# ── FAT32 guard (exFAT/ext4 required)
+FS_TYPE=$(stat -f -c %T "$USB_DIR" 2>/dev/null || df -T "$USB_DIR" 2>/dev/null | tail -1 | awk '{print $2}' || echo "unknown")
+if [[ "${FS_TYPE,,}" == "vfat" || "${FS_TYPE,,}" == "fat32" || "${FS_TYPE,,}" == "msdos" ]]; then
+  echo -e "${RED}ERROR: FAT32 filesystem on $USB_DIR — 4 GB limit will block GGUF! Reformat as exFAT/ext4.${NC}"
+  exit 1
+fi
+# ── RAM guard (warn if <6 GB)
+if command -v free &>/dev/null; then
+  RAM_GB=$(free -g 2>/dev/null | awk '/^Mem:/{print $2}' || echo 0)
+  echo -e "${DGRAY}[SYS]${NC} Host RAM: ${RAM_GB} GB"
+  (( RAM_GB > 0 && RAM_GB < 6 )) && echo -e "${YELLOW}WARNING: <6 GB RAM may OOM on 3B models.${NC}"
 fi
 
 echo -e "\n${DGRAY}[SYS]${NC} Verifying system dependencies..."
@@ -137,17 +189,45 @@ file_is_valid() {
     (( size > min_bytes )) || return 1
 }
 
+verify_sha256() {
+    local file="$1" expected="$2"
+    [[ -z "$expected" ]] && return 0
+    local actual
+    actual=$(sha256sum "$file" 2>/dev/null | awk '{print $1}' || echo "")
+    [[ "$actual" == "$expected" ]] || return 1
+}
+
+is_port_free() {
+    local p="$1"
+    if command -v nc &>/dev/null; then
+        ! nc -z 127.0.0.1 "$p" 2>/dev/null
+    elif command -v lsof &>/dev/null; then
+        ! lsof -iTCP:"$p" -sTCP:LISTEN -P -n 2>/dev/null | grep -q LISTEN
+    else
+        python3 -c "import socket; s=socket.socket(); s.settimeout(1); exit(0 if s.connect_ex(('127.0.0.1', $p))!=0 else 1)" 2>/dev/null
+    fi
+}
+
 download_file() {
-    # Download to a temp file first so failed transfers do not look valid.
+    # Download with resume support (curl -C -) and weak ETag handling
     local url="$1" dest="$2"
     local tmp="${dest}.part"
 
-    rm -f "$tmp"
-    if curl -fL --progress-bar --retry 2 --retry-delay 5 -o "$tmp" "$url"; then
+    # If .part exists, try resume; else start fresh
+    local resume_flag=""
+    if [[ -f "$tmp" ]]; then
+        resume_flag="-C -"
+    fi
+    # --fail treats HTTP >=400 as error; -L follows redirects
+    if curl -fL --progress-bar --retry 2 --retry-delay 5 $resume_flag -o "$tmp" "$url"; then
         mv "$tmp" "$dest"
         return 0
     fi
-
+    # curl -C - may return 33 if range not satisfiable (already complete) — check size
+    if [[ -f "$tmp" ]]; then
+        # keep .part for next resume attempt (don't delete immediately)
+        return 1
+    fi
     rm -f "$tmp"
     return 1
 }
@@ -201,11 +281,20 @@ echo -e "${GRAY}  Type 'all' for every preset model${NC}"
 echo -e "${GRAY}  Type 'c' to add a custom model${NC}"
 echo -e "${GRAY}  Mix them!  (e.g. 1,3,c)${NC}"
 echo ""
-read -rp "  Your choice: " USER_CHOICE
+if [[ -n "$CLI_MODELS" ]]; then
+    USER_CHOICE="$CLI_MODELS"
+    echo -e "${CYAN}  Non-interactive: Using --models $USER_CHOICE${NC}"
+else
+    read -rp "  Your choice: " USER_CHOICE
+fi
 
 if [[ -z "${USER_CHOICE// /}" ]]; then
     echo -e "\n${YELLOW}  No input! Defaulting to [1] NemoMix Unleashed (recommended)...${NC}"
     USER_CHOICE="1"
+fi
+# Inject CLI custom-url as if user typed 'c'
+if [[ -n "$CLI_CUSTOM_URL" ]]; then
+    [[ "$USER_CHOICE" != *"c"* ]] && USER_CHOICE="$USER_CHOICE,c"
 fi
 
 # ── Parse selection ───────────────────────────────────────────
@@ -264,14 +353,23 @@ if $HAS_CUSTOM; then
     echo -e "${GRAY}  Paste a direct link to a .gguf file from HuggingFace.${NC}"
     echo -e "${DGRAY}  Example: https://huggingface.co/user/model-GGUF/resolve/main/model-Q4_K_M.gguf${NC}"
     echo ""
-    read -rp "  GGUF URL: " CUSTOM_URL
+    if [[ -n "$CLI_CUSTOM_URL" ]]; then
+        CUSTOM_URL="$CLI_CUSTOM_URL"
+        echo -e "${CYAN}  Using --custom-url: $CUSTOM_URL${NC}"
+    else
+        read -rp "  GGUF URL: " CUSTOM_URL
+    fi
 
     if [[ -z "${CUSTOM_URL// /}" ]]; then
         echo -e "${RED}  No URL entered - skipping custom model.${NC}"
     elif [[ "$CUSTOM_URL" != *".gguf"* ]]; then
         echo -e "${RED}  WARNING: URL does not end in .gguf - may not be a valid model file.${NC}"
-        read -rp "  Try anyway? (yes/no): " PROCEED
-        [[ "${PROCEED,,}" != "yes" && "${PROCEED,,}" != "y" ]] && CUSTOM_URL=""
+        if [[ "$CLI_YES" == true ]]; then
+            echo -e "${YELLOW}  --yes: proceeding despite warning.${NC}"
+        else
+            read -rp "  Try anyway? (yes/no): " PROCEED
+            [[ "${PROCEED,,}" != "yes" && "${PROCEED,,}" != "y" ]] && CUSTOM_URL=""
+        fi
     fi
 
     if [[ -n "$CUSTOM_URL" ]]; then
@@ -279,7 +377,11 @@ if $HAS_CUSTOM; then
         CUSTOM_FILE="${CUSTOM_FILE%%\?*}"
         [[ "$CUSTOM_FILE" != *.gguf ]] && CUSTOM_FILE="${CUSTOM_FILE}.gguf"
 
-        read -rp "  Give it a short name (e.g. mymodel-local): " CUSTOM_LOCAL
+        if [[ -n "$CLI_CUSTOM_NAME" ]]; then
+            CUSTOM_LOCAL="$CLI_CUSTOM_NAME"
+        else
+            read -rp "  Give it a short name (e.g. mymodel-local): " CUSTOM_LOCAL
+        fi
         [[ -z "${CUSTOM_LOCAL// /}" ]] && CUSTOM_LOCAL="custom-local"
         CUSTOM_LOCAL="${CUSTOM_LOCAL,,}"
         CUSTOM_LOCAL="${CUSTOM_LOCAL// /-}"
@@ -330,10 +432,14 @@ if (( SEL_COUNT >= 3 )) || [[ "${USER_CHOICE,,}" == "all" ]]; then
     fi
     echo -e "${RED}  =============================================${NC}"
     echo ""
-    read -rp "  Continue? (yes/no): " CONFIRM
-    if [[ "${CONFIRM,,}" != "yes" && "${CONFIRM,,}" != "y" ]]; then
-        echo -e "${YELLOW}  Cancelled. Run the installer again to choose fewer models.${NC}"
-        exit 0
+    if [[ "$CLI_YES" == true ]]; then
+        echo -e "${CYAN}  --yes: auto-continuing.${NC}"
+    else
+        read -rp "  Continue? (yes/no): " CONFIRM
+        if [[ "${CONFIRM,,}" != "yes" && "${CONFIRM,,}" != "y" ]]; then
+            echo -e "${YELLOW}  Cancelled. Run the installer again to choose fewer models.${NC}"
+            exit 0
+        fi
     fi
 fi
 
@@ -455,7 +561,8 @@ echo ""
 echo -e "${YELLOW}[5/6] Downloading Ollama AI Engine (Linux)...${NC}"
 
 OLLAMA_BIN="$USB_DIR/ollama/ollama"
-OLLAMA_URL="https://ollama.com/download/ollama-linux-amd64.tar.zst"
+# Prefer pinned version from versions.env if available
+OLLAMA_URL="${OLLAMA_LINUX_URL:-https://ollama.com/download/ollama-linux-amd64.tar.zst}"
 OLLAMA_FILE="$USB_DIR/ollama/ollama-linux-amd64.tar.zst"
 
 if [[ -x "$OLLAMA_BIN" ]]; then
@@ -506,7 +613,7 @@ echo ""
 echo -e "${YELLOW}[6/6] Downloading AnythingLLM Chat Interface (Linux AppImage)...${NC}"
 
 ANYTHINGLLM_APPIMAGE="$USB_DIR/anythingllm/AnythingLLM.AppImage"
-ANYTHINGLLM_URL="https://cdn.anythingllm.com/latest/AnythingLLMDesktop.AppImage"
+ANYTHINGLLM_URL="${ANYTHINGLLM_LINUX_URL:-https://cdn.anythingllm.com/latest/AnythingLLMDesktop.AppImage}"
 
 if file_is_valid "$ANYTHINGLLM_APPIMAGE" 50000000; then
     SIZE_BYTES=$(stat -c%s "$ANYTHINGLLM_APPIMAGE" 2>/dev/null || echo 0)
@@ -538,10 +645,10 @@ else
     export OLLAMA_MODELS="$USB_DIR/ollama/data"
     mkdir -p "$OLLAMA_MODELS"
 
-    # Find a free port to avoid collision with a host Ollama instance
+    # Find a free port to avoid collision with a host Ollama instance (portable helper, not /dev/tcp)
     OLLAMA_PORT="11434"
     for port in $(seq 11434 11534); do
-        (exec 2>/dev/null; echo >/dev/tcp/127.0.0.1/$port) || { OLLAMA_PORT="$port"; break; }
+        if is_port_free "$port"; then OLLAMA_PORT="$port"; break; fi
     done
     export OLLAMA_HOST="127.0.0.1:$OLLAMA_PORT"
 
@@ -634,19 +741,35 @@ VECTOR_DB=lancedb
 EOF
     echo -e "${GREEN}      AnythingLLM configured to use: ${FIRST_LOCAL}${NC}"
 elif grep -q "LLM_PROVIDER=ollama" "$ENV_FILE"; then
-    echo -e "${GREEN}      AnythingLLM already configured for Ollama.${NC}"
+    echo -e "${GREEN}      AnythingLLM already configured for Ollama — preserving token limit.${NC}"
+    # Preserve custom token limit, only patch missing keys
+    if ! grep -q "OLLAMA_MODEL_TOKEN_LIMIT=" "$ENV_FILE"; then
+        echo "OLLAMA_MODEL_TOKEN_LIMIT=4096" >> "$ENV_FILE"
+    else
+        TOK=$(grep -E "^OLLAMA_MODEL_TOKEN_LIMIT=" "$ENV_FILE" | cut -d= -f2 | tr -d '[:space:]' || echo 4096)
+        echo -e "${DGRAY}      Preserved token limit: $TOK${NC}"
+    fi
+    if ! grep -q "OLLAMA_MODEL_PREF=" "$ENV_FILE"; then
+        echo "OLLAMA_MODEL_PREF=${FIRST_LOCAL}" >> "$ENV_FILE"
+    fi
 else
+    # Preserve token limit even when migrating
+    TOK="4096"
+    if grep -q "OLLAMA_MODEL_TOKEN_LIMIT=" "$ENV_FILE"; then
+        TOK=$(grep -E "^OLLAMA_MODEL_TOKEN_LIMIT=" "$ENV_FILE" | cut -d= -f2 | tr -d '[:space:]' || echo 4096)
+    fi
     cat > "$ENV_FILE" <<EOF
 LLM_PROVIDER=ollama
 OLLAMA_BASE_PATH=http://127.0.0.1:11434
 OLLAMA_MODEL_PREF=${FIRST_LOCAL}
-OLLAMA_MODEL_TOKEN_LIMIT=4096
+OLLAMA_MODEL_TOKEN_LIMIT=$TOK
 EMBEDDING_ENGINE=native
 VECTOR_DB=lancedb
 EOF
-    echo -e "${GREEN}      AnythingLLM reconfigured to use external Ollama.${NC}"
+    echo -e "${GREEN}      AnythingLLM reconfigured to use external Ollama (preserved token_limit=$TOK).${NC}"
 fi
 echo -e "${DGRAY}      Default model: ${FIRST_LOCAL}${NC}"
+echo -e "${DGRAY}      Log: $LOG_FILE${NC}"
 
 # ================================================================
 # FINAL SUMMARY

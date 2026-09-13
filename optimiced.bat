@@ -21,8 +21,20 @@ set "TMP=%DATA_DIR%\temp"
 
 if not exist "%DATA_DIR%\temp" mkdir "%DATA_DIR%\temp" 2>nul
 
+:: FAT32 guard (like preflight-check.sh:484)
+for /f "usebackq tokens=*" %%a in (`powershell -NoProfile -Command "try{$d='%USB_ROOT:~0,1%'; $v=Get-CimInstance -ClassName Win32_LogicalDisk -Filter \"DeviceID='$d:'\" -ErrorAction Stop; $v.FileSystem} catch {''}"`) do set "FS_TYPE=%%a"
+if /I "%FS_TYPE%"=="FAT32" (
+    echo [ERROR] FAT32 no soportado / FAT32 not supported — Reformatea como exFAT ^(Format as exFAT^).
+    pause & endlocal & exit /b 1
+)
+
+:: Logging
+set "LOG_DIR=%DATA_DIR%\logs"
+if not exist "%LOG_DIR%" mkdir "%LOG_DIR%" 2>nul
+
 echo ===================================================
 echo     SISTEMA IA PORTABLE - JAMES BOND EDITION v0.07
+echo     PORTABLE AI SYSTEM - JAMES BOND EDITION v0.07 ^(EN/ES^)
 echo ===================================================
 
 :: ═══════════════════════════════════════════════════════════════
@@ -229,6 +241,7 @@ ipconfig /flushdns >nul
 :: Limpiar archivo de sesion
 if exist "%PID_FILE%" del "%PID_FILE%" 2>nul
 
-echo [EXITO] Puedes retirar el USB.
+echo [EXITO] Puedes retirar el USB. / You may safely eject the USB.
 timeout /t 3
+endlocal
 exit /b 0

@@ -28,10 +28,23 @@ echo -e "${DGRAY}[SYS]${NC} Loading USB-mounted configuration..."
 
 cd "$(dirname "$0")"
 USB_DIR=$(pwd)
+# Allow override: ./start-mac.command /Volumes/USB
+if [[ -n "${1:-}" && -d "$1" ]]; then USB_DIR="$(cd "$1" && pwd)"; fi
 MAC_OLLAMA_DIR="$USB_DIR/ollama_mac"
 DATA_DIR="$USB_DIR/ollama/data"
 MODELS_DIR="$USB_DIR/models"
 STORAGE_DIR="$USB_DIR/anythingllm_data"
+
+# Load pinned versions
+if [[ -f "$USB_DIR/versions.env" ]]; then
+  set -a; source "$USB_DIR/versions.env" 2>/dev/null || true; set +a
+fi
+# Logging
+LOG_DIR="$STORAGE_DIR/logs"
+mkdir -p "$LOG_DIR" 2>/dev/null || true
+LOG_FILE="$LOG_DIR/launcher-$(date +%Y%m%d-%H%M%S).log"
+exec > >(tee -a "$LOG_FILE") 2>&1
+echo "[$(date)] Launcher macOS started — USB: $USB_DIR"
 
 OLLAMA_PID=""
 ANYTHINGLLM_PID=""
@@ -63,12 +76,13 @@ echo ""
 # STEP 1: Download Mac Ollama Engine (first time only)
 # ═══════════════════════════════════════════════════════════════
 echo -e "${DGRAY}[STEP 1/7]${NC} Checking Ollama Engine on USB..."
+OLLAMA_MAC_URL_EFFECTIVE="${OLLAMA_MAC_URL:-https://github.com/ollama/ollama/releases/latest/download/ollama-darwin.zip}"
 if [ ! -d "$MAC_OLLAMA_DIR/Ollama.app" ] && [ ! -f "$MAC_OLLAMA_DIR/ollama" ]; then
     echo -e "${YELLOW}[FIRST RUN]${NC} Downloading the AI Engine for macOS..."
-    echo -e "${DGRAY}→ Fetching from official Ollama release channel...${NC}"
+    echo -e "${DGRAY}→ Fetching from official Ollama release channel ($OLLAMA_MAC_URL_EFFECTIVE)...${NC}"
     mkdir -p "$MAC_OLLAMA_DIR"
     curl -fL --progress-bar --retry 2 --retry-delay 5 \
-        "https://github.com/ollama/ollama/releases/latest/download/ollama-darwin.zip" \
+        "$OLLAMA_MAC_URL_EFFECTIVE" \
         -o "$MAC_OLLAMA_DIR/ollama-darwin.zip"
     echo -e "${DGRAY}→ Extracting engine binaries...${NC}"
     unzip -o -q "$MAC_OLLAMA_DIR/ollama-darwin.zip" -d "$MAC_OLLAMA_DIR/"
@@ -106,8 +120,9 @@ if [ ! -d "$USB_DIR/anythingllm_mac/AnythingLLM.app" ]; then
     mkdir -p "$USB_DIR/anythingllm_mac"
     
     echo -e "${DGRAY}→ Fetching Silicon-optimized DMG from AnythingLLM CDN...${NC}"
+    ANYTHINGLLM_MAC_URL_EFFECTIVE="${ANYTHINGLLM_MAC_URL:-https://cdn.anythingllm.com/latest/AnythingLLMDesktop-Silicon.dmg}"
     curl -fL --progress-bar --retry 2 --retry-delay 5 \
-        "https://cdn.anythingllm.com/latest/AnythingLLMDesktop-Silicon.dmg" \
+        "$ANYTHINGLLM_MAC_URL_EFFECTIVE" \
         -o "$USB_DIR/anythingllm_mac/AnythingLLM_Installer.dmg"
     
     echo -e "${DGRAY}→ Extracting AnythingLLM to USB (please wait)...${NC}"
@@ -188,6 +203,8 @@ echo -e "${DGRAY}[STEP 4/7]${NC} Validating AnythingLLM configuration..."
 DEFAULT_MODEL="nemomix-local"
 if [ -f "$MODELS_DIR/installed-models.txt" ]; then
     DEFAULT_MODEL=$(head -n 1 "$MODELS_DIR/installed-models.txt" | cut -d '|' -f 1)
+    # Migrate legacy alias
+    if [[ "$DEFAULT_MODEL" == "nemomix-local_X" ]]; then DEFAULT_MODEL="nemomix-local"; fi
 fi
 
 ENV_FILE="$STORAGE_DIR/storage/.env"
